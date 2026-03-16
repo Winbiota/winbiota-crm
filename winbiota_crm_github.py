@@ -28,7 +28,7 @@ gc     = gspread.authorize(creds)
 ws_src = gc.open_by_key(SHEET_ID).worksheet('CRM Winbiota')
 
 # UNFORMATTED_VALUE for numbers + FORMATTED_STRING so dates arrive as readable text
-all_values = ws_src.get_all_values(value_render_option='UNFORMATTED_VALUE',
+all_values = ws_src.get_all_values(value_render_option='FORMATTED_VALUE',
                                     date_time_render_option='FORMATTED_STRING')
 df_raw = pd.DataFrame(all_values)
 
