@@ -195,9 +195,9 @@ precio_f = (
 rows_totales = [
     (f'=COUNTA({ref("B")})',   'Total leads',                         'number', G_LL),
     (f'=COUNTA({ref("D")})',   'Contestaron WhatsApp',                'number', WHITE),
-    (f'=COUNTA({ref("F")})',   'Llamadas 1 realizadas',               'number', G_LL),
+    (f'=COUNTA({ref("G")})',   'Llamadas 1 realizadas',               'number', G_LL),
     (f'={buenos_f}',           'Llamada 1 efectiva (buenos estatus)', 'number', WHITE),
-    (f'=COUNTA({ref("I")})',   'Llamadas 2 realizadas',               'number', G_LL),
+    (f'=COUNTA({ref("J")})',   'Llamadas 2 realizadas',               'number', G_LL),
     (f'={buenos2_f}',          'Llamada 2 efectiva (buenos estatus)', 'number', WHITE),
     (precio_f,                 'Piden precio / bloqueo económico',    'number', AMBER),
 ]
