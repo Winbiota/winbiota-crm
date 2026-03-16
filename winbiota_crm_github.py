@@ -42,22 +42,45 @@ sel.columns = ['Fecha','Nombre','Tel','Contestaron Whats','Comunicacion',
                'Fecha 1era Llamada','Contesto Llamada 1','Estatus 1era Llamada',
                'Fecha 2nda Llamada','Contesto Llamada 2','Estatus 2nda Llamada','Nota']
 sel['Tel'] = sel['Tel'].astype(str).str.replace('p:','',regex=False).str.strip().replace('nan','')
+
+def parse_date(series):
+    def _parse(val):
+        v = str(val).strip()
+        if v in ('', 'nan', 'None', 'NaT', '<NA>'): return pd.NaT
+        for fmt in ('%d/%m/%Y', '%d/%m/%y', '%Y-%m-%d', '%m/%d/%Y'):
+            try: return datetime.datetime.strptime(v, fmt)
+            except: pass
+        return pd.to_datetime(v, errors='coerce')
+    return series.apply(_parse)
+
+for col in ['Fecha 1era Llamada','Fecha 2nda Llamada']:
+    sel[col] = parse_date(sel[col]).dt.strftime('%d/%m/%Y').replace('NaT','')
+sel['Fecha'] = pd.to_datetime(sel['Fecha'], errors='coerce', dayfirst=True).dt.strftime('%d/%m/%Y').replace('NaT','')
 sel = sel.fillna('')
 
 fecha_lead = pd.to_datetime(data[1], errors='coerce', dayfirst=True).dt.date
 estatus1   = data[12].astype(str).str.strip().str.upper()
 estatus2   = data[16].astype(str).str.strip().str.upper()
 
+# Fechas LL1 y LL2 desde columnas auxiliares W (22) y X (23)
+fecha_ll1 = parse_date(data[22]).dt.date
+fecha_ll2 = parse_date(data[23]).dt.date
+
 buenos_vals1 = ['CONTESTO','CONTESTA','INTERES','LLAMADA','NO INT','SI']
 buenos_vals2 = ['SI CONTESTA','INTERESADA']
 buenos1 = estatus1.isin(buenos_vals1)
 buenos2 = estatus2.isin(buenos_vals2)
 
-leads_day    = fecha_lead.dropna().value_counts().sort_index()
+ll1_day        = fecha_ll1.dropna().value_counts().sort_index()
+ll2_day        = fecha_ll2.dropna().value_counts().sort_index()
+ll1_buenos_day = fecha_ll1[buenos1].dropna().value_counts().sort_index()
+ll2_buenos_day = fecha_ll2[buenos2].dropna().value_counts().sort_index()
+leads_day      = fecha_lead.dropna().value_counts().sort_index()
 data['semana'] = pd.to_datetime(data[1], errors='coerce', dayfirst=True).dt.to_period('W')
 leads_semana   = data.groupby('semana').size()
 
 print(f"N={N}, Buenos1={buenos1.sum()}, Buenos2={buenos2.sum()}")
+print(f"Fechas LL1={fecha_ll1.notna().sum()}, LL2={fecha_ll2.notna().sum()}")
 
 G_D='1B5E20'; G_M='2E7D32'; G_L='E8F5E9'; G_LL='F1F8E9'
 WHITE='FFFFFF'; GRAY='F5F5F5'; AMBER='FFF8E1'; BLUE_D='1565C0'
@@ -166,13 +189,13 @@ r+=1
 section(ws2, r, 'PORCENTAJES', NCOLS2); r+=1
 tr = total_rows
 pct_rows = [
-    (f'=IFERROR(A{tr["contestaron_whats"]}/A{tr["total_leads"]},0)',                              'Contestaron Whats / Total leads', GRAY),
-    (f'=IFERROR(A{tr["ll1_hechas"]}/A{tr["contestaron_whats"]},0)',                               'Llamadas 1 hechas / Contestaron Whats', WHITE),
-    (f'=IFERROR(A{tr["buenos1"]}/A{tr["ll1_hechas"]},0)',                                         'Llamada 1 efectiva (buenos) / Llamadas 1 hechas', GRAY),
-    (f'=IFERROR(A{tr["ll2_hechas"]}/A{tr["ll1_hechas"]},0)',                                      'Llamadas 2 hechas / Llamadas 1 hechas', WHITE),
-    (f'=IFERROR(A{tr["buenos2"]}/A{tr["ll2_hechas"]},0)',                                         'Llamada 2 efectiva (buenos) / Llamadas 2 hechas', GRAY),
-    (f'=IFERROR((A{tr["buenos1"]}+A{tr["buenos2"]})/(A{tr["ll1_hechas"]}+A{tr["ll2_hechas"]}),0)','% Efectividad total', WHITE),
-    (f'=IFERROR(A{tr["precio"]}/A{tr["total_leads"]},0)',                                         '% leads bloqueo economico', AMBER),
+    (f'=IFERROR(A{tr["contestaron_whats"]}/A{tr["total_leads"]},0)',                               'Contestaron Whats / Total leads', GRAY),
+    (f'=IFERROR(A{tr["ll1_hechas"]}/A{tr["contestaron_whats"]},0)',                                'Llamadas 1 hechas / Contestaron Whats', WHITE),
+    (f'=IFERROR(A{tr["buenos1"]}/A{tr["ll1_hechas"]},0)',                                          'Llamada 1 efectiva (buenos) / Llamadas 1 hechas', GRAY),
+    (f'=IFERROR(A{tr["ll2_hechas"]}/A{tr["ll1_hechas"]},0)',                                       'Llamadas 2 hechas / Llamadas 1 hechas', WHITE),
+    (f'=IFERROR(A{tr["buenos2"]}/A{tr["ll2_hechas"]},0)',                                          'Llamada 2 efectiva (buenos) / Llamadas 2 hechas', GRAY),
+    (f'=IFERROR((A{tr["buenos1"]}+A{tr["buenos2"]})/(A{tr["ll1_hechas"]}+A{tr["ll2_hechas"]}),0)', '% Efectividad total', WHITE),
+    (f'=IFERROR(A{tr["precio"]}/A{tr["total_leads"]},0)',                                          '% leads bloqueo economico', AMBER),
 ]
 for val, label, bg in pct_rows:
     c = ws2.cell(row=r, column=1, value=val)
@@ -183,6 +206,47 @@ for val, label, bg in pct_rows:
     st(ws2.cell(row=r, column=2, value=label), sz=10, bg=bg)
     ws2.row_dimensions[r].height = 22; r+=1
 r+=1
+
+section(ws2, r, 'LLAMADAS POR DIA', NCOLS2); r+=1
+all_d = sorted(set(list(ll1_day.index)+list(ll2_day.index)))
+if not all_d:
+    ws2.merge_cells(start_row=r, start_column=1, end_row=r, end_column=NCOLS2)
+    c = ws2.cell(row=r, column=1, value='Sin fechas de llamada registradas')
+    st(c, sz=9, col='888888', bg=GRAY, ha='center')
+    ws2.row_dimensions[r].height = 18; r+=2
+else:
+    hrow(ws2, r,
+         ['Fecha','LL1 hechas','LL1 buenos','% Efect 1','LL2 hechas','LL2 buenos','% Efect 2',
+          'LL tot hechas','Efectivas tot','% Efect tot'],
+         [13,10,10,10,10,10,10,12,13,12]); r+=1
+    tot_ll1=tot_ll2=tot_b1=tot_b2=0
+    for date in all_d:
+        bg  = G_L if r%2==0 else WHITE
+        ll1 = ll1_day.get(date,0); ll2 = ll2_day.get(date,0)
+        b1  = ll1_buenos_day.get(date,0); b2 = ll2_buenos_day.get(date,0)
+        tot_ll1+=ll1; tot_ll2+=ll2; tot_b1+=b1; tot_b2+=b2
+        try: ds = datetime.datetime.strptime(str(date),'%Y-%m-%d').strftime('%d/%m/%Y')
+        except: ds = str(date)
+        vals = [ds, ll1, b1, b1/ll1 if ll1>0 else 0, ll2, b2, b2/ll2 if ll2>0 else 0]
+        for ci,val in enumerate(vals,1):
+            c = ws2.cell(row=r, column=ci, value=val)
+            if ci in [4,7]: c.number_format='0%'
+            st(c, sz=9, bg=bg, ha='center' if ci>1 else 'left'); c.border = bdr2
+        tot_d=ll1+ll2; btot_d=b1+b2
+        for ci,val in enumerate([tot_d, btot_d, btot_d/tot_d if tot_d>0 else 0], 8):
+            c = ws2.cell(row=r, column=ci, value=val)
+            if ci==10: c.number_format='0%'
+            st(c, bold=True, sz=9, bg=bg, ha='center'); c.border = bdr2
+        ws2.row_dimensions[r].height = 16; r+=1
+    tot_d=tot_ll1+tot_ll2; btot=tot_b1+tot_b2
+    vals_tot = ['TOTAL', tot_ll1, tot_b1, tot_b1/tot_ll1 if tot_ll1>0 else 0,
+                tot_ll2, tot_b2, tot_b2/tot_ll2 if tot_ll2>0 else 0,
+                tot_d, btot, btot/tot_d if tot_d>0 else 0]
+    for ci,val in enumerate(vals_tot,1):
+        c = ws2.cell(row=r, column=ci, value=val)
+        if ci in [4,7,10]: c.number_format='0%'
+        st(c, bold=True, sz=10, col=WHITE, bg=G_M, ha='center'); c.border = bdr2
+    ws2.row_dimensions[r].height = 20; r+=2
 
 section(ws2, r, 'LEADS NUEVOS POR DIA', NCOLS2); r+=1
 hrow(ws2, r, ['Fecha','Leads nuevos']+['']*8, [13,12]+[12]*8); r+=1
