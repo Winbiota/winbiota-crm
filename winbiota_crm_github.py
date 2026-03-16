@@ -3,15 +3,17 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import datetime
-import gspread
-from google.oauth2.service_account import Credentials
 import os
 import json
+import io
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
 # ── Credentials & config ──────────────────────────────────────────
 creds_json = json.loads(os.environ['GOOGLE_CREDENTIALS'])
@@ -21,22 +23,26 @@ EMAIL_PASS = os.environ['EMAIL_PASS']
 EMAIL_TO   = EMAIL_USER
 OUTPUT     = '/tmp/Winbiota_CRM_Report.xlsx'
 
-# ── Read Google Sheet ─────────────────────────────────────────────
-scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+# ── Download Sheet as XLSX via Google Drive API ───────────────────
+scopes = ['https://www.googleapis.com/auth/drive.readonly']
 creds  = Credentials.from_service_account_info(creds_json, scopes=scopes)
-gc     = gspread.authorize(creds)
-ws_src = gc.open_by_key(SHEET_ID).worksheet('CRM Winbiota')
+drive  = build('drive', 'v3', credentials=creds)
 
-# UNFORMATTED_VALUE for numbers + FORMATTED_STRING so dates arrive as readable text
-all_values = ws_src.get_all_values(value_render_option='FORMATTED_VALUE',
-                                    date_time_render_option='FORMATTED_STRING')
-df_raw = pd.DataFrame(all_values)
+export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
+request    = drive.files().export_media(fileId=SHEET_ID, mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+buf = io.BytesIO()
+downloader = MediaIoBaseDownload(buf, request)
+done = False
+while not done:
+    _, done = downloader.next_chunk()
+buf.seek(0)
 
+# ── Process exactly like v11 ──────────────────────────────────────
+df_raw = pd.read_excel(buf, sheet_name='CRM Winbiota', header=None)
 data = df_raw.iloc[3:].copy()
 data.columns = range(len(data.columns))
-data = data.replace('', pd.NA)
 data = data[~data[2].astype(str).str.contains('dummy data', na=False)]
-data = data[data[2].astype(str).str.strip().replace('nan','') != ''].reset_index(drop=True)
+data = data[data[2].astype(str).str.strip() != ''].reset_index(drop=True)
 N = len(data)
 
 sel = data[[1,2,4,8,9,10,11,12,14,15,16,20]].copy()
@@ -44,27 +50,13 @@ sel.columns = ['Fecha','Nombre','Tel','Contestaron Whats','Comunicación',
                'Fecha 1era Llamada','Contesto Llamada 1','Estatus 1era Llamada',
                'Fecha 2nda Llamada','Contesto Llamada 2','Estatus 2nda Llamada','Nota']
 sel['Tel'] = sel['Tel'].astype(str).str.replace('p:','',regex=False).str.strip().replace('nan','')
-
-def parse_gs_date(series):
-    def _parse(val):
-        try:
-            v = str(val).strip()
-            if v in ('', 'nan', 'None', 'NaT'): return pd.NaT
-            parsed = pd.to_datetime(v, errors='coerce')
-            if pd.notna(parsed): return parsed
-            n = float(v)
-            return pd.Timestamp('1899-12-30') + pd.Timedelta(days=n)
-        except:
-            return pd.NaT
-    return series.apply(_parse)
-
 for col in ['Fecha','Fecha 1era Llamada','Fecha 2nda Llamada']:
-    sel[col] = parse_gs_date(sel[col]).dt.strftime('%d/%m/%Y').replace('NaT','')
+    sel[col] = pd.to_datetime(sel[col], errors='coerce').dt.strftime('%d/%m/%Y').replace('NaT','')
 sel = sel.fillna('')
 
-fecha_lead = parse_gs_date(data[1]).dt.date
-fecha_ll1  = parse_gs_date(data[10]).dt.date
-fecha_ll2  = parse_gs_date(data[14]).dt.date
+fecha_lead = pd.to_datetime(data[1],  errors='coerce').dt.date
+fecha_ll1  = pd.to_datetime(data[10], errors='coerce').dt.date
+fecha_ll2  = pd.to_datetime(data[14], errors='coerce').dt.date
 estatus1   = data[12].astype(str).str.strip().str.upper()
 estatus2   = data[16].astype(str).str.strip().str.upper()
 
@@ -73,12 +65,12 @@ buenos_vals2 = ['SI CONTESTA','INTERESADA']
 buenos1 = estatus1.isin(buenos_vals1)
 buenos2 = estatus2.isin(buenos_vals2)
 
-ll1_day        = fecha_ll1.dropna().value_counts().sort_index()
-ll2_day        = fecha_ll2.dropna().value_counts().sort_index()
-ll1_buenos_day = fecha_ll1[buenos1].dropna().value_counts().sort_index()
-ll2_buenos_day = fecha_ll2[buenos2].dropna().value_counts().sort_index()
-leads_day      = fecha_lead.dropna().value_counts().sort_index()
-data['semana'] = parse_gs_date(data[1]).dt.to_period('W')
+ll1_day        = fecha_ll1.value_counts().sort_index()
+ll2_day        = fecha_ll2.value_counts().sort_index()
+ll1_buenos_day = fecha_ll1[buenos1].value_counts().sort_index()
+ll2_buenos_day = fecha_ll2[buenos2].value_counts().sort_index()
+leads_day      = fecha_lead.value_counts().sort_index()
+data['semana'] = pd.to_datetime(data[1], errors='coerce').dt.to_period('W')
 leads_semana   = data.groupby('semana').size()
 
 print(f"N={N}, Buenos1={buenos1.sum()}, Buenos2={buenos2.sum()}")
@@ -142,7 +134,7 @@ hrow(ws1, 2, h1, w1)
 for ri,(_, row) in enumerate(sel.iterrows(), 3):
     bg = G_L if ri%2==0 else WHITE
     for ci, val in enumerate(row.values, 1):
-        v = str(val) if str(val) not in ['','nan','NaT','<NA>'] else ''
+        v = str(val) if str(val) not in ['','nan','NaT'] else ''
         c = ws1.cell(row=ri, column=ci, value=v)
         st(c, sz=9, bg=bg, wrap=(ci in [4,5,8,12]))
         c.border = bdr
@@ -179,9 +171,9 @@ precio_f = (
 rows_totales = [
     (f'=COUNTA({ref("B")})',   'Total leads',                         'number', G_LL),
     (f'=COUNTA({ref("D")})',   'Contestaron WhatsApp',                'number', WHITE),
-    (f'=COUNTA({ref("H")})',   'Llamadas 1 realizadas',               'number', G_LL),
+    (f'=COUNTA({ref("F")})',   'Llamadas 1 realizadas',               'number', G_LL),
     (f'={buenos_f}',           'Llamada 1 efectiva (buenos estatus)', 'number', WHITE),
-    (f'=COUNTA({ref("K")})',   'Llamadas 2 realizadas',               'number', G_LL),
+    (f'=COUNTA({ref("I")})',   'Llamadas 2 realizadas',               'number', G_LL),
     (f'={buenos2_f}',          'Llamada 2 efectiva (buenos estatus)', 'number', WHITE),
     (precio_f,                 'Piden precio / bloqueo económico',    'number', AMBER),
 ]
@@ -311,9 +303,7 @@ Adjunto el reporte CRM de Winbiota generado automáticamente el {now}.
 
 Resumen:
 • Total leads: {N}
-• Llamadas 1 realizadas: {estatus1[~estatus1.isin(['NAN',''])].count()}
 • Llamadas 1 efectivas (buenos estatus): {buenos1.sum()}
-• Llamadas 2 realizadas: {estatus2[~estatus2.isin(['NAN',''])].count()}
 • Llamadas 2 efectivas (buenos estatus): {buenos2.sum()}
 
 Saludos,
