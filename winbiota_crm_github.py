@@ -2,10 +2,7 @@ import pandas as pd
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-import datetime
-import os
-import json
-import smtplib
+import datetime, os, json, smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
@@ -13,36 +10,26 @@ from email import encoders
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
-# ── Credentials & config ──────────────────────────────────────────
 creds_json = json.loads(os.environ['GOOGLE_CREDENTIALS'])
 SHEET_ID   = os.environ['SHEET_ID']
 EMAIL_USER = os.environ['EMAIL_USER']
 EMAIL_PASS = os.environ['EMAIL_PASS']
-EMAIL_TO   = EMAIL_USER
 OUTPUT     = '/tmp/Winbiota_CRM_Report.xlsx'
 
-# ── Read via Sheets API with FORMATTED_VALUE ──────────────────────
-# This returns computed formula values exactly as they appear in the sheet
 scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 creds  = Credentials.from_service_account_info(creds_json, scopes=scopes)
 sheets = build('sheets', 'v4', credentials=creds)
-
 result = sheets.spreadsheets().values().get(
     spreadsheetId=SHEET_ID,
     range='CRM Winbiota',
     valueRenderOption='FORMATTED_VALUE',
     dateTimeRenderOption='FORMATTED_STRING'
 ).execute()
-
 all_values = result.get('values', [])
-
-# Pad rows to same length
 max_cols = max(len(r) for r in all_values)
 all_values = [r + [''] * (max_cols - len(r)) for r in all_values]
-
 df_raw = pd.DataFrame(all_values)
 
-# ── Process exactly like v11 ──────────────────────────────────────
 data = df_raw.iloc[3:].copy()
 data.columns = range(len(data.columns))
 data = data.replace('', pd.NA)
@@ -50,38 +37,14 @@ data = data[~data[2].astype(str).str.contains('dummy data', na=False)]
 data = data[data[2].astype(str).str.strip().replace('nan','') != ''].reset_index(drop=True)
 N = len(data)
 
-print(f"N={N}")
-# Debug: check fecha ll1
-debug = data[10].dropna()
-print(f"Col 10 non-empty: {len(debug)}, sample: {list(debug.head(3))}")
-
 sel = data[[1,2,4,8,9,10,11,12,14,15,16,20]].copy()
-sel.columns = ['Fecha','Nombre','Tel','Contestaron Whats','Comunicación',
+sel.columns = ['Fecha','Nombre','Tel','Contestaron Whats','Comunicacion',
                'Fecha 1era Llamada','Contesto Llamada 1','Estatus 1era Llamada',
                'Fecha 2nda Llamada','Contesto Llamada 2','Estatus 2nda Llamada','Nota']
 sel['Tel'] = sel['Tel'].astype(str).str.replace('p:','',regex=False).str.strip().replace('nan','')
-
-def parse_date(series):
-    """Parse dates in dd/mm/yyyy or any pandas-compatible format"""
-    def _parse(val):
-        v = str(val).strip()
-        if v in ('', 'nan', 'None', 'NaT', '<NA>'): return pd.NaT
-        # Try dd/mm/yyyy first (Spanish format from Sheets)
-        for fmt in ('%d/%m/%Y', '%d/%m/%y', '%Y-%m-%d', '%m/%d/%Y'):
-            try:
-                return datetime.datetime.strptime(v, fmt)
-            except:
-                pass
-        return pd.to_datetime(v, errors='coerce')
-    return series.apply(_parse)
-
-for col in ['Fecha','Fecha 1era Llamada','Fecha 2nda Llamada']:
-    sel[col] = parse_date(sel[col]).dt.strftime('%d/%m/%Y').replace('NaT','')
 sel = sel.fillna('')
 
-fecha_lead = parse_date(data[1]).dt.date
-fecha_ll1  = parse_date(data[10]).dt.date
-fecha_ll2  = parse_date(data[14]).dt.date
+fecha_lead = pd.to_datetime(data[1], errors='coerce', dayfirst=True).dt.date
 estatus1   = data[12].astype(str).str.strip().str.upper()
 estatus2   = data[16].astype(str).str.strip().str.upper()
 
@@ -90,18 +53,12 @@ buenos_vals2 = ['SI CONTESTA','INTERESADA']
 buenos1 = estatus1.isin(buenos_vals1)
 buenos2 = estatus2.isin(buenos_vals2)
 
-print(f"Buenos1={buenos1.sum()}, Buenos2={buenos2.sum()}")
-print(f"Fechas LL1={fecha_ll1.notna().sum()}, LL2={fecha_ll2.notna().sum()}")
-
-ll1_day        = fecha_ll1.dropna().value_counts().sort_index()
-ll2_day        = fecha_ll2.dropna().value_counts().sort_index()
-ll1_buenos_day = fecha_ll1[buenos1].dropna().value_counts().sort_index()
-ll2_buenos_day = fecha_ll2[buenos2].dropna().value_counts().sort_index()
-leads_day      = fecha_lead.dropna().value_counts().sort_index()
-data['semana'] = parse_date(data[1]).dt.to_period('W')
+leads_day    = fecha_lead.dropna().value_counts().sort_index()
+data['semana'] = pd.to_datetime(data[1], errors='coerce', dayfirst=True).dt.to_period('W')
 leads_semana   = data.groupby('semana').size()
 
-# ── Styles ────────────────────────────────────────────────────────
+print(f"N={N}, Buenos1={buenos1.sum()}, Buenos2={buenos2.sum()}")
+
 G_D='1B5E20'; G_M='2E7D32'; G_L='E8F5E9'; G_LL='F1F8E9'
 WHITE='FFFFFF'; GRAY='F5F5F5'; AMBER='FFF8E1'; BLUE_D='1565C0'
 
@@ -146,14 +103,13 @@ def kpi(ws, row, value, label, fmt='number', bg=WHITE, ncols=10):
 
 wb = openpyxl.Workbook()
 
-# ── SHEET 1 ───────────────────────────────────────────────────────
 ws1 = wb.active
-ws1.title = "📋 Datos"
+ws1.title = "Datos"
 NCOLS1 = 12
-trow(ws1, 1, '🌿 WINBIOTA — Seguimiento Leads CRM', NCOLS1)
-h1 = ['Fecha','Nombre','Teléfono','Contestaron\nWhats','Comunicación',
-      'Fecha\n1era Llamada','Contesto\nLlamada 1','Estatus\n1era Llamada',
-      'Fecha\n2nda Llamada','Contesto\nLlamada 2','Estatus\n2nda Llamada','Nota']
+trow(ws1, 1, 'WINBIOTA - Seguimiento Leads CRM', NCOLS1)
+h1 = ['Fecha','Nombre','Telefono','Contestaron Whats','Comunicacion',
+      'Fecha 1era Llamada','Contesto Llamada 1','Estatus 1era Llamada',
+      'Fecha 2nda Llamada','Contesto Llamada 2','Estatus 2nda Llamada','Nota']
 w1 = [12,26,14,12,22,13,10,20,13,10,20,26]
 hrow(ws1, 2, h1, w1)
 for ri,(_, row) in enumerate(sel.iterrows(), 3):
@@ -166,19 +122,18 @@ for ri,(_, row) in enumerate(sel.iterrows(), 3):
     ws1.row_dimensions[ri].height = 16
 ws1.freeze_panes = 'A3'
 
-# ── SHEET 2 ───────────────────────────────────────────────────────
-ws2 = wb.create_sheet("📊 Estadísticas")
+ws2 = wb.create_sheet("Estadisticas")
 NCOLS2 = 10
 DR = 2 + N
-s1 = "'📋 Datos'"
+s1 = "'Datos'"
 def ref(col, r1=3, r2=DR): return f"{s1}!{col}{r1}:{col}{r2}"
 
-trow(ws2, 1, '📊 WINBIOTA — Estadísticas & KPIs', NCOLS2)
+trow(ws2, 1, 'WINBIOTA - Estadisticas & KPIs', NCOLS2)
 for i,w in enumerate([14,30,12,12,12,11,11,13,14,13],1):
     ws2.column_dimensions[get_column_letter(i)].width = w
 
 r = 3
-section(ws2, r, '📌  TOTALES', NCOLS2); r+=1
+section(ws2, r, 'TOTALES', NCOLS2); r+=1
 
 buenos_f  = '+'.join([f'COUNTIF({ref("H")},"{v}")' for v in buenos_vals1])
 buenos2_f = '+'.join([f'COUNTIF({ref("K")},"{v}")' for v in buenos_vals2])
@@ -193,13 +148,13 @@ precio_f = (
 )
 
 rows_totales = [
-    (f'=COUNTA({ref("B")})',   'Total leads',                         'number', G_LL),
-    (f'=COUNTA({ref("D")})',   'Contestaron WhatsApp',                'number', WHITE),
-    (f'=COUNTA({ref("G")})',   'Llamadas 1 realizadas',               'number', G_LL),
-    (f'={buenos_f}',           'Llamada 1 efectiva (buenos estatus)', 'number', WHITE),
-    (f'=COUNTA({ref("J")})',   'Llamadas 2 realizadas',               'number', G_LL),
-    (f'={buenos2_f}',          'Llamada 2 efectiva (buenos estatus)', 'number', WHITE),
-    (precio_f,                 'Piden precio / bloqueo económico',    'number', AMBER),
+    (f'=COUNTA({ref("B")})',  'Total leads',                         'number', G_LL),
+    (f'=COUNTA({ref("D")})',  'Contestaron WhatsApp',                'number', WHITE),
+    (f'=COUNTA({ref("G")})',  'Llamadas 1 realizadas',               'number', G_LL),
+    (f'={buenos_f}',          'Llamada 1 efectiva (buenos estatus)', 'number', WHITE),
+    (f'=COUNTA({ref("J")})',  'Llamadas 2 realizadas',               'number', G_LL),
+    (f'={buenos2_f}',         'Llamada 2 efectiva (buenos estatus)', 'number', WHITE),
+    (precio_f,                'Piden precio / bloqueo economico',    'number', AMBER),
 ]
 total_rows = {}
 keys = ['total_leads','contestaron_whats','ll1_hechas','buenos1','ll2_hechas','buenos2','precio']
@@ -208,16 +163,16 @@ for val, label, fmt, bg in rows_totales:
     kpi(ws2, r, val, label, fmt, bg, NCOLS2); r+=1
 r+=1
 
-section(ws2, r, '📈  PORCENTAJES', NCOLS2); r+=1
+section(ws2, r, 'PORCENTAJES', NCOLS2); r+=1
 tr = total_rows
 pct_rows = [
-    (f'=IFERROR(A{tr["contestaron_whats"]}/A{tr["total_leads"]},0)',           'Contestaron Whats / Total leads', GRAY),
-    (f'=IFERROR(A{tr["ll1_hechas"]}/A{tr["contestaron_whats"]},0)',            'Llamadas 1 hechas / Contestaron Whats', WHITE),
-    (f'=IFERROR(A{tr["buenos1"]}/A{tr["ll1_hechas"]},0)',                      'Llamada 1 efectiva (buenos) / Llamadas 1 hechas', GRAY),
-    (f'=IFERROR(A{tr["ll2_hechas"]}/A{tr["ll1_hechas"]},0)',                   'Llamadas 2 hechas / Llamadas 1 hechas', WHITE),
-    (f'=IFERROR(A{tr["buenos2"]}/A{tr["ll2_hechas"]},0)',                      'Llamada 2 efectiva (buenos) / Llamadas 2 hechas', GRAY),
-    (f'=IFERROR((A{tr["buenos1"]}+A{tr["buenos2"]})/(A{tr["ll1_hechas"]}+A{tr["ll2_hechas"]}),0)', '% Efectividad total (buenos ll1+ll2) / (ll1+ll2 hechas)', WHITE),
-    (f'=IFERROR(A{tr["precio"]}/A{tr["total_leads"]},0)',                      '% leads bloqueo económico — excl. "sin precio"', AMBER),
+    (f'=IFERROR(A{tr["contestaron_whats"]}/A{tr["total_leads"]},0)',                              'Contestaron Whats / Total leads', GRAY),
+    (f'=IFERROR(A{tr["ll1_hechas"]}/A{tr["contestaron_whats"]},0)',                               'Llamadas 1 hechas / Contestaron Whats', WHITE),
+    (f'=IFERROR(A{tr["buenos1"]}/A{tr["ll1_hechas"]},0)',                                         'Llamada 1 efectiva (buenos) / Llamadas 1 hechas', GRAY),
+    (f'=IFERROR(A{tr["ll2_hechas"]}/A{tr["ll1_hechas"]},0)',                                      'Llamadas 2 hechas / Llamadas 1 hechas', WHITE),
+    (f'=IFERROR(A{tr["buenos2"]}/A{tr["ll2_hechas"]},0)',                                         'Llamada 2 efectiva (buenos) / Llamadas 2 hechas', GRAY),
+    (f'=IFERROR((A{tr["buenos1"]}+A{tr["buenos2"]})/(A{tr["ll1_hechas"]}+A{tr["ll2_hechas"]}),0)','% Efectividad total', WHITE),
+    (f'=IFERROR(A{tr["precio"]}/A{tr["total_leads"]},0)',                                         '% leads bloqueo economico', AMBER),
 ]
 for val, label, bg in pct_rows:
     c = ws2.cell(row=r, column=1, value=val)
@@ -229,49 +184,7 @@ for val, label, bg in pct_rows:
     ws2.row_dimensions[r].height = 22; r+=1
 r+=1
 
-section(ws2, r, '📅  LLAMADAS POR DÍA', NCOLS2); r+=1
-all_d = sorted(set(list(ll1_day.index)+list(ll2_day.index)))
-
-if not all_d:
-    ws2.merge_cells(start_row=r, start_column=1, end_row=r, end_column=NCOLS2)
-    c = ws2.cell(row=r, column=1, value='Sin fechas de llamada registradas en el CRM')
-    st(c, sz=9, col='888888', bg=GRAY, ha='center')
-    ws2.row_dimensions[r].height = 18; r+=2
-else:
-    hrow(ws2, r,
-         ['Fecha','LL1\nhechas','LL1\nbuenos','% Efect.\n1','LL2\nhechas','LL2\nbuenos','% Efect.\n2',
-          'LL tot.\nhechas','Efectivas\ntotales','% Efect.\ntotal'],
-         [13,10,10,10,10,10,10,12,13,12]); r+=1
-    tot_ll1=tot_ll2=tot_b1=tot_b2=0
-    for date in all_d:
-        bg  = G_L if r%2==0 else WHITE
-        ll1 = ll1_day.get(date,0); ll2 = ll2_day.get(date,0)
-        b1  = ll1_buenos_day.get(date,0); b2 = ll2_buenos_day.get(date,0)
-        tot_ll1+=ll1; tot_ll2+=ll2; tot_b1+=b1; tot_b2+=b2
-        try: ds = datetime.datetime.strptime(str(date),'%Y-%m-%d').strftime('%d/%m/%Y')
-        except: ds = str(date)
-        vals = [ds, ll1, b1, b1/ll1 if ll1>0 else 0, ll2, b2, b2/ll2 if ll2>0 else 0]
-        for ci,val in enumerate(vals,1):
-            c = ws2.cell(row=r, column=ci, value=val)
-            if ci in [4,7]: c.number_format='0%'
-            st(c, sz=9, bg=bg, ha='center' if ci>1 else 'left'); c.border = bdr2
-        tot_d=ll1+ll2; btot_d=b1+b2
-        for ci,val in enumerate([tot_d, btot_d, btot_d/tot_d if tot_d>0 else 0], 8):
-            c = ws2.cell(row=r, column=ci, value=val)
-            if ci==10: c.number_format='0%'
-            st(c, bold=True, sz=9, bg=bg, ha='center'); c.border = bdr2
-        ws2.row_dimensions[r].height = 16; r+=1
-    tot_d=tot_ll1+tot_ll2; btot=tot_b1+tot_b2
-    vals_tot = ['TOTAL', tot_ll1, tot_b1, tot_b1/tot_ll1 if tot_ll1>0 else 0,
-                tot_ll2, tot_b2, tot_b2/tot_ll2 if tot_ll2>0 else 0,
-                tot_d, btot, btot/tot_d if tot_d>0 else 0]
-    for ci,val in enumerate(vals_tot,1):
-        c = ws2.cell(row=r, column=ci, value=val)
-        if ci in [4,7,10]: c.number_format='0%'
-        st(c, bold=True, sz=10, col=WHITE, bg=G_M, ha='center'); c.border = bdr2
-    ws2.row_dimensions[r].height = 20; r+=2
-
-section(ws2, r, '📆  LEADS NUEVOS POR DÍA', NCOLS2); r+=1
+section(ws2, r, 'LEADS NUEVOS POR DIA', NCOLS2); r+=1
 hrow(ws2, r, ['Fecha','Leads nuevos']+['']*8, [13,12]+[12]*8); r+=1
 total_dia=0
 for date in sorted(leads_day.index):
@@ -291,12 +204,12 @@ for ci,val in enumerate(['TOTAL',int(total_dia)]+['']*8,1):
     st(c, bold=True, sz=10, col=WHITE, bg=G_M, ha='center'); c.border = bdr2
 ws2.row_dimensions[r].height = 20; r+=2
 
-section(ws2, r, '📆  LEADS NUEVOS POR SEMANA', NCOLS2); r+=1
+section(ws2, r, 'LEADS NUEVOS POR SEMANA', NCOLS2); r+=1
 hrow(ws2, r, ['Semana','Leads nuevos']+['']*8, [20,12]+[12]*8); r+=1
 total_sem=0
 for period, count in leads_semana.items():
     bg = G_L if r%2==0 else WHITE
-    try: label = f"{period.start_time.strftime('%d/%m/%Y')} → {period.end_time.strftime('%d/%m/%Y')}"
+    try: label = f"{period.start_time.strftime('%d/%m/%Y')} - {period.end_time.strftime('%d/%m/%Y')}"
     except: label = str(period)
     c1 = ws2.cell(row=r, column=1, value=label)
     st(c1, sz=9, bg=bg); c1.border = bdr2
@@ -312,38 +225,21 @@ for ci,val in enumerate(['TOTAL',int(total_sem)]+['']*8,1):
 ws2.row_dimensions[r].height = 20
 
 wb.save(OUTPUT)
-print(f"Excel guardado en {OUTPUT}")
+print(f"Listo. N={N}")
 
-# ── Send email ────────────────────────────────────────────────────
 now = datetime.datetime.now().strftime('%d/%m/%Y %H:%M')
 msg = MIMEMultipart()
-msg['From']    = EMAIL_USER
-msg['To']      = EMAIL_TO
-msg['Subject'] = f'Winbiota CRM — Reporte {now}'
-
-body = f"""Hola,
-
-Adjunto el reporte CRM de Winbiota generado automáticamente el {now}.
-
-Resumen:
-• Total leads: {N}
-• Llamadas 1 efectivas (buenos estatus): {buenos1.sum()}
-• Llamadas 2 efectivas (buenos estatus): {buenos2.sum()}
-
-Saludos,
-Bot Winbiota CRM
-"""
-msg.attach(MIMEText(body, 'plain'))
-
+msg['From'] = EMAIL_USER
+msg['To']   = EMAIL_USER
+msg['Subject'] = f'Winbiota CRM - Reporte {now}'
+msg.attach(MIMEText(f"Reporte CRM generado el {now}.\nLeads: {N} | Buenos1: {buenos1.sum()} | Buenos2: {buenos2.sum()}", 'plain'))
 with open(OUTPUT, 'rb') as f:
     part = MIMEBase('application', 'octet-stream')
     part.set_payload(f.read())
 encoders.encode_base64(part)
 part.add_header('Content-Disposition', f'attachment; filename="Winbiota_CRM_{datetime.datetime.now().strftime("%Y%m%d_%H%M")}.xlsx"')
 msg.attach(part)
-
 with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
     server.login(EMAIL_USER, EMAIL_PASS)
-    server.sendmail(EMAIL_USER, EMAIL_TO, msg.as_string())
-
-print(f"Email enviado a {EMAIL_TO}")
+    server.sendmail(EMAIL_USER, EMAIL_USER, msg.as_string())
+print("Email enviado.")
