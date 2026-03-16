@@ -1,0 +1,32 @@
+name: Winbiota CRM Report
+
+on:
+  schedule:
+    - cron: '0 7 * * *'    # 8h España (UTC+1) / 9h verano (UTC+2)
+    - cron: '0 11 * * *'   # 12h España
+    - cron: '0 16 * * *'   # 17h España
+  workflow_dispatch:         # Permite lanzar manualmente desde GitHub
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas openpyxl gspread google-auth
+
+      - name: Run CRM script
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        run: python winbiota_crm_github.py
