@@ -72,7 +72,7 @@ ll2_buenos        = buenos2.sum()
 # Bloqueo economico
 keywords = ['PRECIO','CARO','VISTO','DINERO','PAGA']
 excl = 'SIN PRECIO'
-precio_mask = comunic.apply(lambda x: any(k in x.upper() for k in keywords) and excl not in x.upper())
+precio_mask = comunic.apply(lambda x: any(k in str(x).upper() for k in keywords) and excl not in str(x).upper())
 bloqueo = precio_mask.sum()
 
 pct = lambda a,b: round(a/b*100,1) if b>0 else 0
