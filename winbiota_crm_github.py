@@ -27,8 +27,9 @@ creds  = Credentials.from_service_account_info(creds_json, scopes=scopes)
 gc     = gspread.authorize(creds)
 ws_src = gc.open_by_key(SHEET_ID).worksheet('CRM Winbiota')
 
-# UNFORMATTED_VALUE: gets raw values (dates as serial numbers)
-all_values = ws_src.get_all_values(value_render_option='UNFORMATTED_VALUE')
+# UNFORMATTED_VALUE for numbers + FORMATTED_STRING so dates arrive as readable text
+all_values = ws_src.get_all_values(value_render_option='UNFORMATTED_VALUE',
+                                    date_time_render_option='FORMATTED_STRING')
 df_raw = pd.DataFrame(all_values)
 
 data = df_raw.iloc[3:].copy()
@@ -130,9 +131,9 @@ wb = openpyxl.Workbook()
 
 # ── SHEET 1 ───────────────────────────────────────────────────────
 ws1 = wb.active
-ws1.title = "Datos"
+ws1.title = "📋 Datos"
 NCOLS1 = 12
-trow(ws1, 1, 'WINBIOTA — Seguimiento Leads CRM', NCOLS1)
+trow(ws1, 1, '🌿 WINBIOTA — Seguimiento Leads CRM', NCOLS1)
 h1 = ['Fecha','Nombre','Teléfono','Contestaron\nWhats','Comunicación',
       'Fecha\n1era Llamada','Contesto\nLlamada 1','Estatus\n1era Llamada',
       'Fecha\n2nda Llamada','Contesto\nLlamada 2','Estatus\n2nda Llamada','Nota']
@@ -149,19 +150,19 @@ for ri,(_, row) in enumerate(sel.iterrows(), 3):
 ws1.freeze_panes = 'A3'
 
 # ── SHEET 2 ───────────────────────────────────────────────────────
-ws2 = wb.create_sheet("Estadisticas")
+ws2 = wb.create_sheet("📊 Estadísticas")
 NCOLS2 = 10
 DR = 2 + N
-s1 = "'Datos'"
+s1 = "'📋 Datos'"
 def ref(col, r1=3, r2=DR): return f"{s1}!{col}{r1}:{col}{r2}"
 
-trow(ws2, 1, 'WINBIOTA — Estadísticas & KPIs', NCOLS2)
+trow(ws2, 1, '📊 WINBIOTA — Estadísticas & KPIs', NCOLS2)
 for i,w in enumerate([14,30,12,12,12,11,11,13,14,13],1):
     ws2.column_dimensions[get_column_letter(i)].width = w
 
 r = 3
 
-section(ws2, r, 'TOTALES', NCOLS2); r+=1
+section(ws2, r, '📌  TOTALES', NCOLS2); r+=1
 
 buenos_f  = '+'.join([f'COUNTIF({ref("H")},"{v}")' for v in buenos_vals1])
 buenos2_f = '+'.join([f'COUNTIF({ref("K")},"{v}")' for v in buenos_vals2])
@@ -191,7 +192,7 @@ for val, label, fmt, bg in rows_totales:
     kpi(ws2, r, val, label, fmt, bg, NCOLS2); r+=1
 r+=1
 
-section(ws2, r, 'PORCENTAJES', NCOLS2); r+=1
+section(ws2, r, '📈  PORCENTAJES', NCOLS2); r+=1
 tr = total_rows
 pct_rows = [
     (f'=IFERROR(A{tr["contestaron_whats"]}/A{tr["total_leads"]},0)',           'Contestaron Whats / Total leads', GRAY),
@@ -212,7 +213,7 @@ for val, label, bg in pct_rows:
     ws2.row_dimensions[r].height = 22; r+=1
 r+=1
 
-section(ws2, r, 'LLAMADAS POR DIA', NCOLS2); r+=1
+section(ws2, r, '📅  LLAMADAS POR DÍA', NCOLS2); r+=1
 all_d = sorted(set(list(ll1_day.index)+list(ll2_day.index)))
 
 if not all_d:
@@ -254,7 +255,7 @@ else:
         st(c, bold=True, sz=10, col=WHITE, bg=G_M, ha='center'); c.border = bdr2
     ws2.row_dimensions[r].height = 20; r+=2
 
-section(ws2, r, 'LEADS NUEVOS POR DIA', NCOLS2); r+=1
+section(ws2, r, '📆  LEADS NUEVOS POR DÍA', NCOLS2); r+=1
 hrow(ws2, r, ['Fecha','Leads nuevos']+['']*8, [13,12]+[12]*8); r+=1
 total_dia=0
 for date in sorted(leads_day.index):
@@ -274,7 +275,7 @@ for ci,val in enumerate(['TOTAL',int(total_dia)]+['']*8,1):
     st(c, bold=True, sz=10, col=WHITE, bg=G_M, ha='center'); c.border = bdr2
 ws2.row_dimensions[r].height = 20; r+=2
 
-section(ws2, r, 'LEADS NUEVOS POR SEMANA', NCOLS2); r+=1
+section(ws2, r, '📆  LEADS NUEVOS POR SEMANA', NCOLS2); r+=1
 hrow(ws2, r, ['Semana','Leads nuevos']+['']*8, [20,12]+[12]*8); r+=1
 total_sem=0
 for period, count in leads_semana.items():
