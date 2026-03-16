@@ -2,27 +2,23 @@ name: Winbiota CRM Report
 
 on:
   schedule:
-    - cron: '0 7 * * *'    # 8h España (UTC+1) / 9h verano (UTC+2)
-    - cron: '0 11 * * *'   # 12h España
-    - cron: '0 16 * * *'   # 17h España
+    - cron: '0 7 * * *'
+    - cron: '0 11 * * *'
+    - cron: '0 16 * * *'
   workflow_dispatch:
 
 jobs:
   generate-report:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: pip install pandas openpyxl google-auth google-api-python-client
-
       - name: Run CRM script
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
