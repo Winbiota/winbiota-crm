@@ -25,4 +25,4 @@ jobs:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-        run: python winbiota_crm_github.py
+        run: run: python crm_script.py
