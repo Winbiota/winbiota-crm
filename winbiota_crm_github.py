@@ -5,7 +5,6 @@ from openpyxl.utils import get_column_letter
 import datetime
 import os
 import json
-import io
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -13,7 +12,6 @@ from email.mime.text import MIMEText
 from email import encoders
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
 
 # ── Credentials & config ──────────────────────────────────────────
 creds_json = json.loads(os.environ['GOOGLE_CREDENTIALS'])
@@ -23,40 +21,67 @@ EMAIL_PASS = os.environ['EMAIL_PASS']
 EMAIL_TO   = EMAIL_USER
 OUTPUT     = '/tmp/Winbiota_CRM_Report.xlsx'
 
-# ── Download Sheet as XLSX via Google Drive API ───────────────────
-scopes = ['https://www.googleapis.com/auth/drive.readonly']
+# ── Read via Sheets API with FORMATTED_VALUE ──────────────────────
+# This returns computed formula values exactly as they appear in the sheet
+scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 creds  = Credentials.from_service_account_info(creds_json, scopes=scopes)
-drive  = build('drive', 'v3', credentials=creds)
+sheets = build('sheets', 'v4', credentials=creds)
 
-export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
-request    = drive.files().export_media(fileId=SHEET_ID, mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-buf = io.BytesIO()
-downloader = MediaIoBaseDownload(buf, request)
-done = False
-while not done:
-    _, done = downloader.next_chunk()
-buf.seek(0)
+result = sheets.spreadsheets().values().get(
+    spreadsheetId=SHEET_ID,
+    range='CRM Winbiota',
+    valueRenderOption='FORMATTED_VALUE',
+    dateTimeRenderOption='FORMATTED_STRING'
+).execute()
+
+all_values = result.get('values', [])
+
+# Pad rows to same length
+max_cols = max(len(r) for r in all_values)
+all_values = [r + [''] * (max_cols - len(r)) for r in all_values]
+
+df_raw = pd.DataFrame(all_values)
 
 # ── Process exactly like v11 ──────────────────────────────────────
-df_raw = pd.read_excel(buf, sheet_name='CRM Winbiota', header=None)
 data = df_raw.iloc[3:].copy()
 data.columns = range(len(data.columns))
+data = data.replace('', pd.NA)
 data = data[~data[2].astype(str).str.contains('dummy data', na=False)]
-data = data[data[2].astype(str).str.strip() != ''].reset_index(drop=True)
+data = data[data[2].astype(str).str.strip().replace('nan','') != ''].reset_index(drop=True)
 N = len(data)
+
+print(f"N={N}")
+# Debug: check fecha ll1
+debug = data[10].dropna()
+print(f"Col 10 non-empty: {len(debug)}, sample: {list(debug.head(3))}")
 
 sel = data[[1,2,4,8,9,10,11,12,14,15,16,20]].copy()
 sel.columns = ['Fecha','Nombre','Tel','Contestaron Whats','Comunicación',
                'Fecha 1era Llamada','Contesto Llamada 1','Estatus 1era Llamada',
                'Fecha 2nda Llamada','Contesto Llamada 2','Estatus 2nda Llamada','Nota']
 sel['Tel'] = sel['Tel'].astype(str).str.replace('p:','',regex=False).str.strip().replace('nan','')
+
+def parse_date(series):
+    """Parse dates in dd/mm/yyyy or any pandas-compatible format"""
+    def _parse(val):
+        v = str(val).strip()
+        if v in ('', 'nan', 'None', 'NaT', '<NA>'): return pd.NaT
+        # Try dd/mm/yyyy first (Spanish format from Sheets)
+        for fmt in ('%d/%m/%Y', '%d/%m/%y', '%Y-%m-%d', '%m/%d/%Y'):
+            try:
+                return datetime.datetime.strptime(v, fmt)
+            except:
+                pass
+        return pd.to_datetime(v, errors='coerce')
+    return series.apply(_parse)
+
 for col in ['Fecha','Fecha 1era Llamada','Fecha 2nda Llamada']:
-    sel[col] = pd.to_datetime(sel[col], errors='coerce').dt.strftime('%d/%m/%Y').replace('NaT','')
+    sel[col] = parse_date(sel[col]).dt.strftime('%d/%m/%Y').replace('NaT','')
 sel = sel.fillna('')
 
-fecha_lead = pd.to_datetime(data[1],  errors='coerce').dt.date
-fecha_ll1  = pd.to_datetime(data[10], errors='coerce').dt.date
-fecha_ll2  = pd.to_datetime(data[14], errors='coerce').dt.date
+fecha_lead = parse_date(data[1]).dt.date
+fecha_ll1  = parse_date(data[10]).dt.date
+fecha_ll2  = parse_date(data[14]).dt.date
 estatus1   = data[12].astype(str).str.strip().str.upper()
 estatus2   = data[16].astype(str).str.strip().str.upper()
 
@@ -65,16 +90,16 @@ buenos_vals2 = ['SI CONTESTA','INTERESADA']
 buenos1 = estatus1.isin(buenos_vals1)
 buenos2 = estatus2.isin(buenos_vals2)
 
-ll1_day        = fecha_ll1.value_counts().sort_index()
-ll2_day        = fecha_ll2.value_counts().sort_index()
-ll1_buenos_day = fecha_ll1[buenos1].value_counts().sort_index()
-ll2_buenos_day = fecha_ll2[buenos2].value_counts().sort_index()
-leads_day      = fecha_lead.value_counts().sort_index()
-data['semana'] = pd.to_datetime(data[1], errors='coerce').dt.to_period('W')
-leads_semana   = data.groupby('semana').size()
-
-print(f"N={N}, Buenos1={buenos1.sum()}, Buenos2={buenos2.sum()}")
+print(f"Buenos1={buenos1.sum()}, Buenos2={buenos2.sum()}")
 print(f"Fechas LL1={fecha_ll1.notna().sum()}, LL2={fecha_ll2.notna().sum()}")
+
+ll1_day        = fecha_ll1.dropna().value_counts().sort_index()
+ll2_day        = fecha_ll2.dropna().value_counts().sort_index()
+ll1_buenos_day = fecha_ll1[buenos1].dropna().value_counts().sort_index()
+ll2_buenos_day = fecha_ll2[buenos2].dropna().value_counts().sort_index()
+leads_day      = fecha_lead.dropna().value_counts().sort_index()
+data['semana'] = parse_date(data[1]).dt.to_period('W')
+leads_semana   = data.groupby('semana').size()
 
 # ── Styles ────────────────────────────────────────────────────────
 G_D='1B5E20'; G_M='2E7D32'; G_L='E8F5E9'; G_LL='F1F8E9'
@@ -134,7 +159,7 @@ hrow(ws1, 2, h1, w1)
 for ri,(_, row) in enumerate(sel.iterrows(), 3):
     bg = G_L if ri%2==0 else WHITE
     for ci, val in enumerate(row.values, 1):
-        v = str(val) if str(val) not in ['','nan','NaT'] else ''
+        v = str(val) if str(val) not in ['','nan','NaT','<NA>'] else ''
         c = ws1.cell(row=ri, column=ci, value=v)
         st(c, sz=9, bg=bg, wrap=(ci in [4,5,8,12]))
         c.border = bdr
@@ -153,7 +178,6 @@ for i,w in enumerate([14,30,12,12,12,11,11,13,14,13],1):
     ws2.column_dimensions[get_column_letter(i)].width = w
 
 r = 3
-
 section(ws2, r, '📌  TOTALES', NCOLS2); r+=1
 
 buenos_f  = '+'.join([f'COUNTIF({ref("H")},"{v}")' for v in buenos_vals1])
