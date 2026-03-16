@@ -5,7 +5,7 @@ on:
     - cron: '0 7 * * *'    # 8h España (UTC+1) / 9h verano (UTC+2)
     - cron: '0 11 * * *'   # 12h España
     - cron: '0 16 * * *'   # 17h España
-  workflow_dispatch:         # Permite lanzar manualmente desde GitHub
+  workflow_dispatch:
 
 jobs:
   generate-report:
@@ -21,7 +21,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pandas openpyxl gspread google-auth
+        run: pip install pandas openpyxl google-auth google-api-python-client
 
       - name: Run CRM script
         env:
