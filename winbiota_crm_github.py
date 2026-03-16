@@ -27,13 +27,15 @@ creds  = Credentials.from_service_account_info(creds_json, scopes=scopes)
 gc     = gspread.authorize(creds)
 ws_src = gc.open_by_key(SHEET_ID).worksheet('CRM Winbiota')
 
-all_values = ws_src.get_all_values()
+# UNFORMATTED_VALUE: gets raw values (dates as serial numbers)
+all_values = ws_src.get_all_values(value_render_option='UNFORMATTED_VALUE')
 df_raw = pd.DataFrame(all_values)
 
 data = df_raw.iloc[3:].copy()
 data.columns = range(len(data.columns))
+data = data.replace('', pd.NA)
 data = data[~data[2].astype(str).str.contains('dummy data', na=False)]
-data = data[data[2].astype(str).str.strip() != ''].reset_index(drop=True)
+data = data[data[2].astype(str).str.strip().replace('nan','') != ''].reset_index(drop=True)
 N = len(data)
 
 sel = data[[1,2,4,8,9,10,11,12,14,15,16,20]].copy()
@@ -41,13 +43,27 @@ sel.columns = ['Fecha','Nombre','Tel','Contestaron Whats','Comunicación',
                'Fecha 1era Llamada','Contesto Llamada 1','Estatus 1era Llamada',
                'Fecha 2nda Llamada','Contesto Llamada 2','Estatus 2nda Llamada','Nota']
 sel['Tel'] = sel['Tel'].astype(str).str.replace('p:','',regex=False).str.strip().replace('nan','')
+
+def parse_gs_date(series):
+    def _parse(val):
+        try:
+            v = str(val).strip()
+            if v in ('', 'nan', 'None', 'NaT'): return pd.NaT
+            parsed = pd.to_datetime(v, errors='coerce')
+            if pd.notna(parsed): return parsed
+            n = float(v)
+            return pd.Timestamp('1899-12-30') + pd.Timedelta(days=n)
+        except:
+            return pd.NaT
+    return series.apply(_parse)
+
 for col in ['Fecha','Fecha 1era Llamada','Fecha 2nda Llamada']:
-    sel[col] = pd.to_datetime(sel[col], errors='coerce').dt.strftime('%d/%m/%Y').replace('NaT','')
+    sel[col] = parse_gs_date(sel[col]).dt.strftime('%d/%m/%Y').replace('NaT','')
 sel = sel.fillna('')
 
-fecha_lead = pd.to_datetime(data[1],  errors='coerce').dt.date
-fecha_ll1  = pd.to_datetime(data[10], errors='coerce').dt.date
-fecha_ll2  = pd.to_datetime(data[14], errors='coerce').dt.date
+fecha_lead = parse_gs_date(data[1]).dt.date
+fecha_ll1  = parse_gs_date(data[10]).dt.date
+fecha_ll2  = parse_gs_date(data[14]).dt.date
 estatus1   = data[12].astype(str).str.strip().str.upper()
 estatus2   = data[16].astype(str).str.strip().str.upper()
 
@@ -56,15 +72,16 @@ buenos_vals2 = ['SI CONTESTA','INTERESADA']
 buenos1 = estatus1.isin(buenos_vals1)
 buenos2 = estatus2.isin(buenos_vals2)
 
-ll1_day        = fecha_ll1.value_counts().sort_index()
-ll2_day        = fecha_ll2.value_counts().sort_index()
-ll1_buenos_day = fecha_ll1[buenos1].value_counts().sort_index()
-ll2_buenos_day = fecha_ll2[buenos2].value_counts().sort_index()
-leads_day      = fecha_lead.value_counts().sort_index()
-data['semana'] = pd.to_datetime(data[1], errors='coerce').dt.to_period('W')
+ll1_day        = fecha_ll1.dropna().value_counts().sort_index()
+ll2_day        = fecha_ll2.dropna().value_counts().sort_index()
+ll1_buenos_day = fecha_ll1[buenos1].dropna().value_counts().sort_index()
+ll2_buenos_day = fecha_ll2[buenos2].dropna().value_counts().sort_index()
+leads_day      = fecha_lead.dropna().value_counts().sort_index()
+data['semana'] = parse_gs_date(data[1]).dt.to_period('W')
 leads_semana   = data.groupby('semana').size()
 
 print(f"N={N}, Buenos1={buenos1.sum()}, Buenos2={buenos2.sum()}")
+print(f"Fechas LL1={fecha_ll1.notna().sum()}, LL2={fecha_ll2.notna().sum()}")
 
 # ── Styles ────────────────────────────────────────────────────────
 G_D='1B5E20'; G_M='2E7D32'; G_L='E8F5E9'; G_LL='F1F8E9'
@@ -124,7 +141,7 @@ hrow(ws1, 2, h1, w1)
 for ri,(_, row) in enumerate(sel.iterrows(), 3):
     bg = G_L if ri%2==0 else WHITE
     for ci, val in enumerate(row.values, 1):
-        v = str(val) if str(val) not in ['','nan','NaT'] else ''
+        v = str(val) if str(val) not in ['','nan','NaT','<NA>'] else ''
         c = ws1.cell(row=ri, column=ci, value=v)
         st(c, sz=9, bg=bg, wrap=(ci in [4,5,8,12]))
         c.border = bdr
@@ -161,9 +178,9 @@ precio_f = (
 rows_totales = [
     (f'=COUNTA({ref("B")})',   'Total leads',                         'number', G_LL),
     (f'=COUNTA({ref("D")})',   'Contestaron WhatsApp',                'number', WHITE),
-    (f'=COUNTA({ref("F")})',   'Llamadas 1 realizadas',               'number', G_LL),
+    (f'=COUNTA({ref("H")})',   'Llamadas 1 realizadas',               'number', G_LL),
     (f'={buenos_f}',           'Llamada 1 efectiva (buenos estatus)', 'number', WHITE),
-    (f'=COUNTA({ref("I")})',   'Llamadas 2 realizadas',               'number', G_LL),
+    (f'=COUNTA({ref("K")})',   'Llamadas 2 realizadas',               'number', G_LL),
     (f'={buenos2_f}',          'Llamada 2 efectiva (buenos estatus)', 'number', WHITE),
     (precio_f,                 'Piden precio / bloqueo económico',    'number', AMBER),
 ]
@@ -196,41 +213,46 @@ for val, label, bg in pct_rows:
 r+=1
 
 section(ws2, r, 'LLAMADAS POR DIA', NCOLS2); r+=1
-hrow(ws2, r,
-     ['Fecha','LL1\nhechas','LL1\nbuenos','% Efect.\n1','LL2\nhechas','LL2\nbuenos','% Efect.\n2',
-      'LL tot.\nhechas','Efectivas\ntotales','% Efect.\ntotal'],
-     [13,10,10,10,10,10,10,12,13,12]); r+=1
-
 all_d = sorted(set(list(ll1_day.index)+list(ll2_day.index)))
-tot_ll1=tot_ll2=tot_b1=tot_b2=0
-for date in all_d:
-    bg  = G_L if r%2==0 else WHITE
-    ll1 = ll1_day.get(date,0); ll2 = ll2_day.get(date,0)
-    b1  = ll1_buenos_day.get(date,0); b2 = ll2_buenos_day.get(date,0)
-    tot_ll1+=ll1; tot_ll2+=ll2; tot_b1+=b1; tot_b2+=b2
-    try: ds = datetime.datetime.strptime(str(date),'%Y-%m-%d').strftime('%d/%m/%Y')
-    except: ds = str(date)
-    vals = [ds, ll1, b1, b1/ll1 if ll1>0 else 0, ll2, b2, b2/ll2 if ll2>0 else 0]
-    for ci,val in enumerate(vals,1):
-        c = ws2.cell(row=r, column=ci, value=val)
-        if ci in [4,7]: c.number_format='0%'
-        st(c, sz=9, bg=bg, ha='center' if ci>1 else 'left'); c.border = bdr2
-    tot_d=ll1+ll2; btot_d=b1+b2
-    for ci,val in enumerate([tot_d, btot_d, btot_d/tot_d if tot_d>0 else 0], 8):
-        c = ws2.cell(row=r, column=ci, value=val)
-        if ci==10: c.number_format='0%'
-        st(c, bold=True, sz=9, bg=bg, ha='center'); c.border = bdr2
-    ws2.row_dimensions[r].height = 16; r+=1
 
-tot_d=tot_ll1+tot_ll2; btot=tot_b1+tot_b2
-vals_tot = ['TOTAL', tot_ll1, tot_b1, tot_b1/tot_ll1 if tot_ll1>0 else 0,
-            tot_ll2, tot_b2, tot_b2/tot_ll2 if tot_ll2>0 else 0,
-            tot_d, btot, btot/tot_d if tot_d>0 else 0]
-for ci,val in enumerate(vals_tot,1):
-    c = ws2.cell(row=r, column=ci, value=val)
-    if ci in [4,7,10]: c.number_format='0%'
-    st(c, bold=True, sz=10, col=WHITE, bg=G_M, ha='center'); c.border = bdr2
-ws2.row_dimensions[r].height = 20; r+=2
+if not all_d:
+    ws2.merge_cells(start_row=r, start_column=1, end_row=r, end_column=NCOLS2)
+    c = ws2.cell(row=r, column=1, value='Sin fechas de llamada registradas en el CRM')
+    st(c, sz=9, col='888888', bg=GRAY, ha='center')
+    ws2.row_dimensions[r].height = 18; r+=2
+else:
+    hrow(ws2, r,
+         ['Fecha','LL1\nhechas','LL1\nbuenos','% Efect.\n1','LL2\nhechas','LL2\nbuenos','% Efect.\n2',
+          'LL tot.\nhechas','Efectivas\ntotales','% Efect.\ntotal'],
+         [13,10,10,10,10,10,10,12,13,12]); r+=1
+    tot_ll1=tot_ll2=tot_b1=tot_b2=0
+    for date in all_d:
+        bg  = G_L if r%2==0 else WHITE
+        ll1 = ll1_day.get(date,0); ll2 = ll2_day.get(date,0)
+        b1  = ll1_buenos_day.get(date,0); b2 = ll2_buenos_day.get(date,0)
+        tot_ll1+=ll1; tot_ll2+=ll2; tot_b1+=b1; tot_b2+=b2
+        try: ds = datetime.datetime.strptime(str(date),'%Y-%m-%d').strftime('%d/%m/%Y')
+        except: ds = str(date)
+        vals = [ds, ll1, b1, b1/ll1 if ll1>0 else 0, ll2, b2, b2/ll2 if ll2>0 else 0]
+        for ci,val in enumerate(vals,1):
+            c = ws2.cell(row=r, column=ci, value=val)
+            if ci in [4,7]: c.number_format='0%'
+            st(c, sz=9, bg=bg, ha='center' if ci>1 else 'left'); c.border = bdr2
+        tot_d=ll1+ll2; btot_d=b1+b2
+        for ci,val in enumerate([tot_d, btot_d, btot_d/tot_d if tot_d>0 else 0], 8):
+            c = ws2.cell(row=r, column=ci, value=val)
+            if ci==10: c.number_format='0%'
+            st(c, bold=True, sz=9, bg=bg, ha='center'); c.border = bdr2
+        ws2.row_dimensions[r].height = 16; r+=1
+    tot_d=tot_ll1+tot_ll2; btot=tot_b1+tot_b2
+    vals_tot = ['TOTAL', tot_ll1, tot_b1, tot_b1/tot_ll1 if tot_ll1>0 else 0,
+                tot_ll2, tot_b2, tot_b2/tot_ll2 if tot_ll2>0 else 0,
+                tot_d, btot, btot/tot_d if tot_d>0 else 0]
+    for ci,val in enumerate(vals_tot,1):
+        c = ws2.cell(row=r, column=ci, value=val)
+        if ci in [4,7,10]: c.number_format='0%'
+        st(c, bold=True, sz=10, col=WHITE, bg=G_M, ha='center'); c.border = bdr2
+    ws2.row_dimensions[r].height = 20; r+=2
 
 section(ws2, r, 'LEADS NUEVOS POR DIA', NCOLS2); r+=1
 hrow(ws2, r, ['Fecha','Leads nuevos']+['']*8, [13,12]+[12]*8); r+=1
@@ -288,7 +310,9 @@ Adjunto el reporte CRM de Winbiota generado automáticamente el {now}.
 
 Resumen:
 • Total leads: {N}
+• Llamadas 1 realizadas: {estatus1[~estatus1.isin(['NAN',''])].count()}
 • Llamadas 1 efectivas (buenos estatus): {buenos1.sum()}
+• Llamadas 2 realizadas: {estatus2[~estatus2.isin(['NAN',''])].count()}
 • Llamadas 2 efectivas (buenos estatus): {buenos2.sum()}
 
 Saludos,
