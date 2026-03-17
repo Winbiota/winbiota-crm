@@ -1,0 +1,23 @@
+name: Winbiota Reporte Diario
+
+on:
+  schedule:
+    - cron: '0 19 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  reporte-diario:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas openpyxl google-auth google-api-python-client
+      - name: Generate daily report
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        run: python report_diario.py
