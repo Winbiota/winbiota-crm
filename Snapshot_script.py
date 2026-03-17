@@ -8,7 +8,9 @@ SHEET_ID   = os.environ['SHEET_ID']
 scopes = ['https://www.googleapis.com/auth/spreadsheets']
 creds  = Credentials.from_service_account_info(creds_json, scopes=scopes)
 sheets = build('sheets', 'v4', credentials=creds)
-
+spreadsheet = sheets.spreadsheets().get(spreadsheetId=SHEET_ID).execute()
+print(f"Sheet name: {spreadsheet['properties']['title']}")
+print(f"Sheet ID: {SHEET_ID}")
 # Read CRM data
 result = sheets.spreadsheets().values().get(
     spreadsheetId=SHEET_ID,
