@@ -8,9 +8,15 @@ SHEET_ID   = os.environ['SHEET_ID']
 scopes = ['https://www.googleapis.com/auth/spreadsheets']
 creds  = Credentials.from_service_account_info(creds_json, scopes=scopes)
 sheets = build('sheets', 'v4', credentials=creds)
-spreadsheet = sheets.spreadsheets().get(spreadsheetId=SHEET_ID).execute()
-print(f"Sheet name: {spreadsheet['properties']['title']}")
-print(f"Sheet ID: {SHEET_ID}")
+
+# Hora española (UTC+1)
+now_es   = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+today_es = now_es.strftime('%Y-%m-%d')
+timestamp = now_es.strftime('%Y-%m-%d %H:%M')
+hour_str  = now_es.strftime('%H:00')
+
+print(f"Fecha hoy (España): {today_es}, Hora: {hour_str}")
+
 # Read CRM data
 result = sheets.spreadsheets().values().get(
     spreadsheetId=SHEET_ID,
@@ -25,7 +31,13 @@ all_values = [r + [''] * (max_cols - len(r)) for r in all_values]
 buenos_vals1 = ['CONTESTO','CONTESTA','INTERES','LLAMADA','NO INT','SI']
 buenos_vals2 = ['SI CONTESTA','INTERESADA']
 
-# Count from row 4 (index 3), skip dummy data
+def parse_date_str(val):
+    v = str(val).strip()
+    for fmt in ('%d/%m/%Y','%d/%m/%y','%Y-%m-%d','%m/%d/%Y'):
+        try: return datetime.datetime.strptime(v, fmt).strftime('%Y-%m-%d')
+        except: pass
+    return ''
+
 ll1_total = 0
 ll1_buenos = 0
 ll2_total = 0
@@ -35,26 +47,30 @@ for row in all_values[3:]:
     name = str(row[2]).strip() if len(row) > 2 else ''
     if 'dummy data' in name.lower() or name == '':
         continue
+
+    # Fecha de llamada 1 desde col auxiliar W (idx 22)
+    fecha_ll1 = parse_date_str(row[22]) if len(row) > 22 else ''
+    # Fecha de llamada 2 desde col auxiliar X (idx 23)
+    fecha_ll2 = parse_date_str(row[23]) if len(row) > 23 else ''
+
     e1 = str(row[12]).strip().upper() if len(row) > 12 else ''
     e2 = str(row[16]).strip().upper() if len(row) > 16 else ''
     c1 = str(row[11]).strip() if len(row) > 11 else ''
     c2 = str(row[15]).strip() if len(row) > 15 else ''
-    if c1 and c1 not in ['', 'nan', 'None']:
+
+    # Solo contar llamadas de HOY
+    if fecha_ll1 == today_es and c1 and c1 not in ['', 'nan', 'None']:
         ll1_total += 1
         if e1 in buenos_vals1:
             ll1_buenos += 1
-    if c2 and c2 not in ['', 'nan', 'None']:
+
+    if fecha_ll2 == today_es and c2 and c2 not in ['', 'nan', 'None']:
         ll2_total += 1
         if e2 in buenos_vals2:
             ll2_buenos += 1
 
-now = datetime.datetime.utcnow()
-timestamp = now.strftime('%Y-%m-%d %H:%M')
-date_str  = now.strftime('%Y-%m-%d')
-hour_str  = now.strftime('%H:00')
-
-snapshot_row = [timestamp, date_str, hour_str, ll1_total, ll1_buenos, ll2_total, ll2_buenos]
-print(f"Snapshot: {snapshot_row}")
+snapshot_row = [timestamp, today_es, hour_str, ll1_total, ll1_buenos, ll2_total, ll2_buenos]
+print(f"Snapshot HOY: {snapshot_row}")
 
 # Ensure Snapshots sheet exists
 try:
@@ -63,7 +79,6 @@ try:
         body={'requests': [{'addSheet': {'properties': {'title': 'Snapshots', 'hidden': True}}}]}
     ).execute()
     print("Hoja Snapshots creada")
-    # Add header
     sheets.spreadsheets().values().update(
         spreadsheetId=SHEET_ID,
         range='Snapshots!A1',
