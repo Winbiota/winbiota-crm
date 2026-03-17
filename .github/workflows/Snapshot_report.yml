@@ -2,30 +2,7 @@ name: Winbiota Snapshot Horario
 
 on:
   schedule:
-    - cron: '0 7 * * 1-5'
-    - cron: '30 7 * * 1-5'
-    - cron: '0 8 * * 1-5'
-    - cron: '30 8 * * 1-5'
-    - cron: '0 9 * * 1-5'
-    - cron: '30 9 * * 1-5'
-    - cron: '0 10 * * 1-5'
-    - cron: '30 10 * * 1-5'
-    - cron: '0 11 * * 1-5'
-    - cron: '30 11 * * 1-5'
-    - cron: '0 12 * * 1-5'
-    - cron: '30 12 * * 1-5'
-    - cron: '0 13 * * 1-5'
-    - cron: '30 13 * * 1-5'
-    - cron: '0 14 * * 1-5'
-    - cron: '30 14 * * 1-5'
-    - cron: '0 15 * * 1-5'
-    - cron: '30 15 * * 1-5'
-    - cron: '0 16 * * 1-5'
-    - cron: '30 16 * * 1-5'
-    - cron: '0 17 * * 1-5'
-    - cron: '30 17 * * 1-5'
-    - cron: '0 18 * * 1-5'
-    - cron: '30 18 * * 1-5'
+    - cron: '0,30 7-18 * * 1-5'
   workflow_dispatch:
 
 jobs:
