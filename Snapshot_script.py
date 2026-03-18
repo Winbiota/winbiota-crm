@@ -69,8 +69,26 @@ for row in all_values[3:]:
         if e2 in buenos_vals2:
             ll2_buenos += 1
 
-snapshot_row = [timestamp, today_es, hour_str, ll1_total, ll1_buenos, ll2_total, ll2_buenos]
-print(f"Snapshot HOY: {snapshot_row}")
+print(f"Snapshot HOY: ll1={ll1_total}({ll1_buenos}) ll2={ll2_total}({ll2_buenos})")
+
+# Read previous snapshots to calculate nuevos
+ll1_nuevos = ''
+ll2_nuevos = ''
+try:
+    prev = sheets.spreadsheets().values().get(
+        spreadsheetId=SHEET_ID,
+        range='Snapshots!A:G'
+    ).execute().get('values', [])
+    for r in reversed(prev):
+        if len(r) >= 7 and r[1] == today_es:
+            ll1_nuevos = ll1_total - int(r[3])
+            ll2_nuevos = ll2_total - int(r[5])
+            break
+except Exception as e:
+    print(f"Warning reading previous snapshot: {e}")
+
+snapshot_row = [timestamp, today_es, hour_str, ll1_total, ll1_buenos, ll2_total, ll2_buenos, ll1_nuevos, ll2_nuevos]
+print(f"Snapshot final: {snapshot_row}")
 
 # Ensure Snapshots sheet exists
 try:
@@ -83,7 +101,7 @@ try:
         spreadsheetId=SHEET_ID,
         range='Snapshots!A1',
         valueInputOption='RAW',
-        body={'values': [['Timestamp','Fecha','Hora','LL1 total','LL1 buenos','LL2 total','LL2 buenos']]}
+        body={'values': [['Timestamp','Fecha','Hora','LL1 total','LL1 buenos','LL2 total','LL2 buenos','LL1 nuevos','LL2 nuevos']]}
     ).execute()
 except Exception as e:
     if 'already exists' in str(e).lower():
